@@ -10,7 +10,7 @@ fn main() {
         let mut stdin_input = String::new();
         io::stdin().read_to_string(&mut stdin_input).unwrap();
         if !stdin_input.trim().is_empty() {
-            results.push(format!("[stdin output]\n{}", stdin_input.trim()));
+            results.push(format!("[section]\n[stdin]\n{}\n[end section]", stdin_input.trim()));
         }
     }
 
@@ -31,7 +31,7 @@ fn main() {
         };
 
         results.push(format!(
-            "[command]\n{}\n[output]\n{}",
+            "[section]\n[command]\n{}\n[output]\n{}\n[end section]",
             cmd_str,
             combined_output.trim()
         ));
