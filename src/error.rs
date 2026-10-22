@@ -1,55 +1,32 @@
 //! Error types for argument validation and system interaction.
 
-use std::error::Error as StdError;
-use std::fmt;
 use std::io;
 use std::process::ExitCode;
 
+use thiserror::Error;
+
 /// A failure that stopped larry.
-#[derive(Debug)]
+#[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum Error {
     /// The command line could not be understood.
-    Usage(clap::Error),
+    #[error(transparent)]
+    Usage(#[from] clap::Error),
     /// A command could not be started.
+    #[error("failed to run command '{command}': {source}")]
     Spawn {
         /// The command that failed to start.
         command: String,
         /// The underlying cause.
+        #[source]
         source: io::Error,
     },
     /// Standard input could not be read.
-    Read(io::Error),
+    #[error("failed to read stdin: {0}")]
+    Read(#[source] io::Error),
     /// Output could not be written.
-    Write(io::Error),
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Error::Usage(source) => write!(f, "{source}"),
-            Error::Spawn { command, source } => {
-                write!(f, "failed to run command '{command}': {source}")
-            }
-            Error::Read(source) => write!(f, "failed to read stdin: {source}"),
-            Error::Write(source) => write!(f, "failed to write output: {source}"),
-        }
-    }
-}
-
-impl StdError for Error {
-    fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        match self {
-            Error::Usage(source) => Some(source),
-            Error::Spawn { source, .. } => Some(source),
-            Error::Read(source) | Error::Write(source) => Some(source),
-        }
-    }
-}
-
-impl From<clap::Error> for Error {
-    fn from(source: clap::Error) -> Self {
-        Error::Usage(source)
-    }
+    #[error("failed to write output: {0}")]
+    Write(#[source] io::Error),
 }
 
 impl Error {
@@ -57,15 +34,16 @@ impl Error {
     ///
     /// A closed pipe ends the run quietly, the way other command line tools
     /// behave when their output is piped into `head`.
+    #[must_use = "the broken pipe state decides how the run ends"]
     pub fn is_broken_pipe(&self) -> bool {
         matches!(self, Error::Write(source) if source.kind() == io::ErrorKind::BrokenPipe)
     }
 
     /// Writes the error to the stream that fits it and returns the exit code.
     ///
-    /// Usage errors carry their own rendering, so they are printed as clap
-    /// formatted them. Help and version output are not failures and leave
-    /// the run successful.
+    /// Usage errors carry their own rendering. Help and version output go to
+    /// stdout and leave the run successful.
+    #[must_use = "the exit code of a failed run must not be discarded"]
     pub fn report(&self) -> ExitCode {
         match self {
             Error::Usage(report) => {

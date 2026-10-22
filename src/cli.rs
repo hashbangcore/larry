@@ -1,15 +1,18 @@
 //! Parsing of command line arguments into an executable plan.
 
+use std::ffi::OsString;
 use std::num::NonZeroU8;
+use std::str::FromStr;
 use std::time::Duration;
 
 use clap::{ArgAction, CommandFactory, Parser};
+use thiserror::Error;
 
 /// Largest number of repetitions accepted by `-r`.
 pub const MAX_REPEAT: u8 = 100;
 
 /// Pause between repetitions when `-r 0` selects an endless loop.
-pub const INFINITE_INTERVAL: Duration = Duration::from_secs(5);
+pub(crate) const INFINITE_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Command line interface of larry.
 #[derive(Debug, Parser)]
@@ -20,7 +23,7 @@ pub const INFINITE_INTERVAL: Duration = Duration::from_secs(5);
     long_about = "Capture piped stdin and execute commands, producing structured output\nwith [section] markers.",
     disable_version_flag = true
 )]
-pub struct Cli {
+pub(crate) struct Cli {
     /// How many times to repeat the corresponding command.
     ///
     /// Defaults to 1, accepts up to 100, and 0 repeats the command forever
@@ -30,7 +33,7 @@ pub struct Cli {
         long = "repeat",
         value_name = "N",
         action = ArgAction::Append,
-        value_parser = parse_repeat
+        value_parser = Repeat::from_str
     )]
     repeat: Vec<Repeat>,
 
@@ -42,6 +45,7 @@ pub struct Cli {
     #[arg(short = 'v', long = "version", action = ArgAction::Version)]
     version: Option<bool>,
 }
+
 /// The commands to execute, in order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Plan {
@@ -60,6 +64,7 @@ pub struct Invocation {
 
 /// How many times an invocation runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Repeat {
     /// A fixed number of runs, back to back.
     Count(RepeatCount),
@@ -81,23 +86,36 @@ impl RepeatCount {
     /// A single run.
     pub const ONE: RepeatCount = RepeatCount(NonZeroU8::MIN);
 
-    /// Builds a count, rejecting zero and anything above [`RepeatCount::MAX`].
-    pub fn new(value: u8) -> Option<Self> {
-        let value = NonZeroU8::new(value).filter(|value| value.get() <= Self::MAX)?;
-        Some(RepeatCount(value))
-    }
-
     /// The numeric value of the count.
+    #[must_use = "the count is the result of the conversion"]
     pub fn value(self) -> u8 {
         self.0.get()
     }
 }
 
+impl TryFrom<u8> for RepeatCount {
+    type Error = InvalidRepeat;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match NonZeroU8::new(value) {
+            Some(value) if value.get() <= Self::MAX => Ok(RepeatCount(value)),
+            Some(_) => Err(InvalidRepeat::AboveMaximum { max: Self::MAX }),
+            None => Err(InvalidRepeat::BelowMinimum { min: 1 }),
+        }
+    }
+}
+
 /// Parses command line arguments into a [`Plan`].
 ///
-/// Repeat counts and commands are paired in the order they were given, so
-/// `-r` may appear before or after the command it applies to.
-pub fn parse(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<Plan, clap::Error> {
+/// Repeat counts and commands are paired by position, so `-r` may appear
+/// before or after the command it applies to.
+///
+/// # Errors
+///
+/// Returns an error when the arguments cannot be understood, when a repeat
+/// count is not a number between 0 and 100, or when there are more repeat
+/// counts than commands.
+pub(crate) fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Plan, clap::Error> {
     let cli = Cli::try_parse_from(args)?;
     cli.into_plan()
 }
@@ -125,23 +143,49 @@ impl Cli {
     }
 }
 
-/// Parses a `-r` value into a [`Repeat`].
-fn parse_repeat(raw: &str) -> Result<Repeat, String> {
-    let value: u32 = raw
-        .parse()
-        .map_err(|_| format!("invalid repeat count '{raw}'"))?;
+impl FromStr for Repeat {
+    type Err = InvalidRepeat;
 
-    if value == 0 {
-        return Ok(Repeat::Forever {
-            interval: INFINITE_INTERVAL,
-        });
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        let value: u32 = raw.parse().map_err(|_| InvalidRepeat::NotANumber {
+            value: raw.to_string(),
+        })?;
+
+        if value == 0 {
+            return Ok(Repeat::Forever {
+                interval: INFINITE_INTERVAL,
+            });
+        }
+
+        let count =
+            u8::try_from(value).map_err(|_| InvalidRepeat::AboveMaximum { max: MAX_REPEAT })?;
+
+        RepeatCount::try_from(count).map(Repeat::Count)
     }
+}
 
-    u8::try_from(value)
-        .ok()
-        .and_then(RepeatCount::new)
-        .map(Repeat::Count)
-        .ok_or_else(|| format!("repeat count must not exceed {MAX_REPEAT}"))
+/// A repeat count that could not be understood.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum InvalidRepeat {
+    /// The value was not a number.
+    #[error("invalid repeat count '{value}'")]
+    NotANumber {
+        /// The offending value.
+        value: String,
+    },
+    /// The value was below the smallest accepted count.
+    #[error("repeat count must be at least {min}")]
+    BelowMinimum {
+        /// The smallest accepted count.
+        min: u8,
+    },
+    /// The value was above the largest accepted count.
+    #[error("repeat count must not exceed {max}")]
+    AboveMaximum {
+        /// The largest accepted count.
+        max: u8,
+    },
 }
 
 #[cfg(test)]
@@ -151,15 +195,15 @@ mod tests {
     #[test]
     fn a_repeat_count_becomes_a_counted_repetition() {
         assert_eq!(
-            parse_repeat("3").expect("valid count"),
-            Repeat::Count(RepeatCount::new(3).expect("valid count"))
+            "3".parse::<Repeat>().expect("valid count"),
+            Repeat::Count(RepeatCount::try_from(3).expect("valid count"))
         );
     }
 
     #[test]
     fn a_zero_count_becomes_an_endless_loop() {
         assert_eq!(
-            parse_repeat("0").expect("valid count"),
+            "0".parse::<Repeat>().expect("valid count"),
             Repeat::Forever {
                 interval: INFINITE_INTERVAL
             }
@@ -168,34 +212,58 @@ mod tests {
 
     #[test]
     fn a_count_above_the_maximum_is_rejected() {
-        assert_eq!(
-            parse_repeat("101"),
-            Err("repeat count must not exceed 100".to_string())
-        );
+        assert!(matches!(
+            "101".parse::<Repeat>(),
+            Err(InvalidRepeat::AboveMaximum { max: 100 })
+        ));
     }
 
     #[test]
     fn a_non_numeric_count_is_rejected() {
-        assert_eq!(
-            parse_repeat("abc"),
-            Err("invalid repeat count 'abc'".to_string())
-        );
+        assert!(matches!(
+            "abc".parse::<Repeat>(),
+            Err(InvalidRepeat::NotANumber { value }) if value == "abc"
+        ));
     }
 
     #[test]
     fn a_negative_count_is_rejected() {
+        assert!(matches!(
+            "-1".parse::<Repeat>(),
+            Err(InvalidRepeat::NotANumber { value }) if value == "-1"
+        ));
+    }
+
+    #[test]
+    fn the_largest_accepted_count_is_accepted() {
         assert_eq!(
-            parse_repeat("-1"),
-            Err("invalid repeat count '-1'".to_string())
+            RepeatCount::try_from(100).expect("valid count").value(),
+            100
         );
+    }
+
+    #[test]
+    fn a_count_of_zero_is_rejected() {
+        assert!(matches!(
+            RepeatCount::try_from(0),
+            Err(InvalidRepeat::BelowMinimum { min: 1 })
+        ));
+    }
+
+    #[test]
+    fn a_count_above_the_maximum_is_rejected_by_conversion() {
+        assert!(matches!(
+            RepeatCount::try_from(101),
+            Err(InvalidRepeat::AboveMaximum { max: 100 })
+        ));
     }
 
     #[test]
     fn a_repeat_applies_to_the_command_in_the_same_position() {
         let cli = Cli {
             repeat: vec![
-                Repeat::Count(RepeatCount::new(4).expect("valid count")),
-                Repeat::Count(RepeatCount::new(2).expect("valid count")),
+                Repeat::Count(RepeatCount::try_from(4).expect("valid count")),
+                Repeat::Count(RepeatCount::try_from(2).expect("valid count")),
             ],
             command: vec!["pwd".to_string(), "whoami".to_string()],
             version: None,
@@ -208,11 +276,11 @@ mod tests {
             vec![
                 Invocation {
                     command: "pwd".to_string(),
-                    repeat: Repeat::Count(RepeatCount::new(4).expect("valid count")),
+                    repeat: Repeat::Count(RepeatCount::try_from(4).expect("valid count")),
                 },
                 Invocation {
                     command: "whoami".to_string(),
-                    repeat: Repeat::Count(RepeatCount::new(2).expect("valid count")),
+                    repeat: Repeat::Count(RepeatCount::try_from(2).expect("valid count")),
                 },
             ]
         );
@@ -235,8 +303,8 @@ mod tests {
     fn more_repeats_than_commands_is_rejected() {
         let cli = Cli {
             repeat: vec![
-                Repeat::Count(RepeatCount::new(2).expect("valid count")),
-                Repeat::Count(RepeatCount::new(3).expect("valid count")),
+                Repeat::Count(RepeatCount::try_from(2).expect("valid count")),
+                Repeat::Count(RepeatCount::try_from(3).expect("valid count")),
             ],
             command: vec!["pwd".to_string()],
             version: None,

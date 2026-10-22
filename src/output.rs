@@ -5,14 +5,14 @@ use std::io::{self, Write};
 use crate::section::Section;
 
 /// Writes sections one after another, separated by a blank line.
-pub struct Emitter<'a> {
-    out: &'a mut dyn Write,
+pub(crate) struct Emitter<'out> {
+    out: &'out mut dyn Write,
     wrote_any: bool,
 }
 
-impl<'a> Emitter<'a> {
+impl<'out> Emitter<'out> {
     /// Creates an emitter writing to `out`.
-    pub fn new(out: &'a mut dyn Write) -> Self {
+    pub(crate) fn new(out: &'out mut dyn Write) -> Self {
         Emitter {
             out,
             wrote_any: false,
@@ -20,7 +20,11 @@ impl<'a> Emitter<'a> {
     }
 
     /// Writes one section and flushes it.
-    pub fn write(&mut self, section: &Section) -> io::Result<()> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the section cannot be written or flushed.
+    pub(crate) fn write(&mut self, section: &Section<'_>) -> io::Result<()> {
         if self.wrote_any {
             self.out.write_all(b"\n")?;
         }
@@ -38,7 +42,7 @@ impl<'a> Emitter<'a> {
 mod tests {
     use super::*;
 
-    fn emit(sections: &[Section]) -> String {
+    fn emit(sections: &[Section<'_>]) -> String {
         let mut buffer = Vec::new();
         let mut emitter = Emitter::new(&mut buffer);
 
@@ -72,7 +76,7 @@ mod tests {
             text: "in".to_string(),
         };
         let second = Section::Command {
-            command: "pwd".to_string(),
+            command: "pwd",
             output: "/tmp".to_string(),
         };
 

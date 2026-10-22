@@ -11,20 +11,30 @@ use crate::output::Emitter;
 use crate::section::Section;
 
 /// Runs the plan, capturing piped input and writing sections to `out`.
-pub fn run(plan: &Plan, out: &mut dyn Write) -> Result<(), Error> {
+///
+/// # Errors
+///
+/// Returns an error when the input cannot be read, when a command cannot be
+/// started, or when the output cannot be written.
+pub(crate) fn run(plan: &Plan, out: &mut dyn Write) -> Result<(), Error> {
     let stdin = capture_stdin()?;
-    execute(plan, stdin, out, &mut |duration| sleep(duration))
+    execute(plan, stdin, out, sleep)
 }
 
 /// Runs the plan with the given piped input, pacing endless repetitions.
 ///
 /// `pace` is called between two consecutive repetitions of an endless
 /// invocation, never before the first one.
-pub fn execute(
+///
+/// # Errors
+///
+/// Returns an error when a command cannot be started or when the output
+/// cannot be written.
+pub(crate) fn execute(
     plan: &Plan,
     stdin: Option<String>,
     out: &mut dyn Write,
-    pace: &mut dyn FnMut(Duration),
+    mut pace: impl FnMut(Duration),
 ) -> Result<(), Error> {
     let mut emitter = Emitter::new(out);
 
@@ -35,7 +45,7 @@ pub fn execute(
     }
 
     for invocation in &plan.invocations {
-        run_invocation(invocation, &mut emitter, pace)?;
+        run_invocation(invocation, &mut emitter, &mut pace)?;
     }
 
     Ok(())
@@ -44,7 +54,7 @@ pub fn execute(
 fn run_invocation(
     invocation: &Invocation,
     emitter: &mut Emitter<'_>,
-    pace: &mut dyn FnMut(Duration),
+    pace: &mut impl FnMut(Duration),
 ) -> Result<(), Error> {
     match invocation.repeat {
         Repeat::Count(count) => {
@@ -65,8 +75,8 @@ fn emit_command(invocation: &Invocation, emitter: &mut Emitter<'_>) -> Result<()
     let output = exec::run(&invocation.command)?;
 
     let section = Section::Command {
-        command: invocation.command.clone(),
-        output: output.combined().trim().to_string(),
+        command: &invocation.command,
+        output: output.combined_trimmed(),
     };
 
     emitter.write(&section).map_err(Error::Write)
@@ -76,7 +86,11 @@ fn emit_command(invocation: &Invocation, emitter: &mut Emitter<'_>) -> Result<()
 ///
 /// Returns `None` when standard input is a terminal or carries nothing but
 /// whitespace.
-pub fn capture_stdin() -> Result<Option<String>, Error> {
+///
+/// # Errors
+///
+/// Returns an error when standard input cannot be read.
+pub(crate) fn capture_stdin() -> Result<Option<String>, Error> {
     let stdin = io::stdin();
 
     if stdin.is_terminal() {
@@ -180,10 +194,10 @@ mod tests {
         let mut recorder = Recorder::new(100);
         let plan = plan(vec![invocation(
             "printf hello",
-            Repeat::Count(RepeatCount::new(3).expect("valid count")),
+            Repeat::Count(RepeatCount::try_from(3).expect("valid count")),
         )]);
 
-        execute(&plan, None, &mut recorder, &mut |_| {}).expect("run succeeds");
+        execute(&plan, None, &mut recorder, |_| {}).expect("run succeeds");
 
         assert_eq!(recorder.emits(), 3);
     }
@@ -198,7 +212,7 @@ mod tests {
             Repeat::Forever { interval },
         )]);
 
-        let result = execute(&plan, None, &mut recorder, &mut |duration| {
+        let result = execute(&plan, None, &mut recorder, |duration| {
             events.borrow_mut().push(Event::Pace(duration));
         });
 
@@ -224,13 +238,7 @@ mod tests {
             Repeat::Count(RepeatCount::ONE),
         )]);
 
-        execute(
-            &plan,
-            Some("payload".to_string()),
-            &mut recorder,
-            &mut |_| {},
-        )
-        .expect("run succeeds");
+        execute(&plan, Some("payload".to_string()), &mut recorder, |_| {}).expect("run succeeds");
 
         assert_eq!(
             recorder.written(),

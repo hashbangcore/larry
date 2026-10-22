@@ -1,16 +1,31 @@
 //! Larry captures piped input and command output as labeled sections.
 //!
-//! The command line is parsed once into a [`Plan`], which the [`app`] module
-//! then executes, streaming one [`Section`] per command execution.
+//! The command line is parsed once into a [`Plan`], which is then executed,
+//! streaming one [`Section`] per command execution.
+//!
+//! # Examples
+//!
+//! ```
+//! use larry::Section;
+//!
+//! let section = Section::Stdin {
+//!     text: "payload".to_string(),
+//! };
+//!
+//! assert_eq!(
+//!     section.to_string(),
+//!     "[section]\n[stdin]\npayload\n[end section]"
+//! );
+//! ```
 
-pub mod app;
-pub mod cli;
-pub mod error;
-pub mod exec;
-pub mod output;
-pub mod section;
+mod app;
+mod cli;
+mod error;
+mod exec;
+mod output;
+mod section;
 
-pub use cli::{Invocation, Plan, Repeat, RepeatCount};
+pub use cli::{InvalidRepeat, Invocation, MAX_REPEAT, Plan, Repeat, RepeatCount};
 pub use error::Error;
 pub use section::Section;
 
@@ -20,6 +35,11 @@ use std::io;
 /// Runs larry with the given arguments.
 ///
 /// The arguments include the program name, as they do in `argv`.
+///
+/// # Errors
+///
+/// Returns an error when the arguments cannot be understood, when a command
+/// cannot be started, or when input or output cannot be read or written.
 pub fn run(args: impl IntoIterator<Item = OsString>) -> Result<(), Error> {
     let plan = cli::parse(args)?;
 

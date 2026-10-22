@@ -1,3 +1,5 @@
+//! Command line entry point of larry.
+
 use std::env;
 use std::process::ExitCode;
 

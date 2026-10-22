@@ -3,8 +3,12 @@
 use std::fmt;
 
 /// A block of output, labeled by where it came from.
+///
+/// The command text is borrowed from the plan that produced it, so a command
+/// repeated many times does not copy its own text over and over.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Section {
+#[non_exhaustive]
+pub enum Section<'cmd> {
     /// Text captured from standard input.
     Stdin {
         /// The captured text.
@@ -13,13 +17,13 @@ pub enum Section {
     /// The result of running a command.
     Command {
         /// The command that ran, verbatim.
-        command: String,
+        command: &'cmd str,
         /// Everything the command wrote.
         output: String,
     },
 }
 
-impl fmt::Display for Section {
+impl fmt::Display for Section<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Section::Stdin { text } => {
@@ -54,7 +58,7 @@ mod tests {
     #[test]
     fn a_command_section_labels_its_command_and_output() {
         let section = Section::Command {
-            command: "printf hello".to_string(),
+            command: "printf hello",
             output: "hello".to_string(),
         };
 
@@ -67,7 +71,7 @@ mod tests {
     #[test]
     fn an_empty_output_keeps_its_own_line() {
         let section = Section::Command {
-            command: "true".to_string(),
+            command: "true",
             output: String::new(),
         };
 

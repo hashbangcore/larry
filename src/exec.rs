@@ -6,7 +6,7 @@ use crate::error::Error;
 
 /// What a command wrote to its standard streams.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CommandOutput {
+pub(crate) struct CommandOutput {
     /// Text written to standard output.
     pub stdout: String,
     /// Text written to standard error.
@@ -18,10 +18,29 @@ impl CommandOutput {
     ///
     /// Standard output comes first, then standard error, with nothing between
     /// them, mirroring how the shell reports them.
-    pub fn combined(&self) -> String {
+    pub(crate) fn combined(&self) -> String {
         let mut combined = String::with_capacity(self.stdout.len() + self.stderr.len());
         combined.push_str(&self.stdout);
         combined.push_str(&self.stderr);
+        combined
+    }
+
+    /// Both streams joined, without the whitespace that surrounds them.
+    ///
+    /// The whitespace is cut in place, so the text is copied once at most.
+    pub(crate) fn combined_trimmed(&self) -> String {
+        let mut combined = self.combined();
+
+        let start = combined.len() - combined.trim_start().len();
+        let end = combined.trim_end().len();
+
+        if start == 0 && end == combined.len() {
+            return combined;
+        }
+
+        let _ = combined.drain(..start);
+        combined.truncate(end - start);
+
         combined
     }
 }
@@ -30,7 +49,11 @@ impl CommandOutput {
 ///
 /// The exit status of the command is not reported: larry reports what the
 /// command wrote, not how it ended.
-pub fn run(command: &str) -> Result<CommandOutput, Error> {
+///
+/// # Errors
+///
+/// Returns an error when the command cannot be started.
+pub(crate) fn run(command: &str) -> Result<CommandOutput, Error> {
     let output = Command::new("sh")
         .arg("-c")
         .arg(command)
@@ -71,6 +94,27 @@ mod tests {
         let output = run("printf out; printf err >&2").expect("command runs");
 
         assert_eq!(output.combined(), "outerr");
+    }
+
+    #[test]
+    fn combined_output_is_trimmed() {
+        let output = run("printf '  spaced  \\n'").expect("command runs");
+
+        assert_eq!(output.combined_trimmed(), "spaced");
+    }
+
+    #[test]
+    fn trimmed_output_keeps_the_whitespace_inside() {
+        let output = run("printf 'a b'").expect("command runs");
+
+        assert_eq!(output.combined_trimmed(), "a b");
+    }
+
+    #[test]
+    fn trimming_does_not_join_the_streams() {
+        let output = run("printf 'out\\n'; printf 'err\\n' >&2").expect("command runs");
+
+        assert_eq!(output.combined_trimmed(), "out\nerr");
     }
 
     #[test]
