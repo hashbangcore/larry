@@ -44,7 +44,7 @@ fn help_describes_the_options() {
 
     assert!(output.status.success());
     assert!(stdout(&output).contains("Usage: larry [OPTIONS] [COMMAND]..."));
-    assert!(stdout(&output).contains("-r <N>"));
+    assert!(stdout(&output).contains("--repeat <N>"));
 }
 
 #[test]
@@ -127,6 +127,28 @@ fn repeat_applies_to_the_command_that_follows_it() {
 }
 
 #[test]
+fn a_repeat_may_follow_its_command() {
+    let output = larry(&["printf hello", "-r", "3"]);
+
+    assert!(output.status.success());
+    assert_eq!(
+        stdout(&output).matches("[command]\nprintf hello").count(),
+        3
+    );
+}
+
+#[test]
+fn a_repeat_may_surround_its_command() {
+    let output = larry(&["-r", "3", "printf hello"]);
+
+    assert!(output.status.success());
+    assert_eq!(
+        stdout(&output).matches("[command]\nprintf hello").count(),
+        3
+    );
+}
+
+#[test]
 fn repeat_counts_can_be_mixed() {
     let output = larry(&["-r", "2", "printf one", "-r", "3", "printf two"]);
 
@@ -181,10 +203,8 @@ fn an_invalid_repeat_count_fails_with_a_clear_error() {
     let output = larry(&["-r", "abc", "printf hello"]);
 
     assert!(!output.status.success());
-    assert_eq!(
-        stderr(&output),
-        "error: -r requires a valid number, got 'abc'\n"
-    );
+    assert!(stderr(&output).contains("invalid value 'abc'"));
+    assert!(stderr(&output).contains("invalid repeat count 'abc'"));
     assert!(stdout(&output).is_empty());
 }
 
@@ -193,7 +213,7 @@ fn a_repeat_count_above_the_maximum_fails_with_a_clear_error() {
     let output = larry(&["-r", "101", "printf hello"]);
 
     assert!(!output.status.success());
-    assert_eq!(stderr(&output), "error: -r maximum is 100, got '101'\n");
+    assert!(stderr(&output).contains("repeat count must not exceed 100"));
     assert!(stdout(&output).is_empty());
 }
 
@@ -202,7 +222,8 @@ fn repeat_without_a_count_fails_with_a_clear_error() {
     let output = larry(&["-r"]);
 
     assert!(!output.status.success());
-    assert_eq!(stderr(&output), "error: -r requires a repeat count\n");
+    assert!(stderr(&output).contains("a value is required"));
+    assert!(stdout(&output).is_empty());
 }
 
 #[test]
@@ -210,7 +231,8 @@ fn repeat_without_a_command_fails_with_a_clear_error() {
     let output = larry(&["-r", "2"]);
 
     assert!(!output.status.success());
-    assert_eq!(stderr(&output), "error: -r requires a command\n");
+    assert!(stderr(&output).contains("-r requires a command"));
+    assert!(stdout(&output).is_empty());
 }
 
 #[test]
@@ -218,18 +240,29 @@ fn an_unknown_flag_fails_with_a_clear_error() {
     let output = larry(&["--bogus"]);
 
     assert!(!output.status.success());
-    assert_eq!(
-        stderr(&output),
-        "error: unknown flag '--bogus'. Use 'larry -h' for usage.\n"
-    );
+    assert!(stderr(&output).contains("unexpected argument '--bogus'"));
+    assert!(stdout(&output).is_empty());
 }
 
 #[test]
-fn help_wins_over_an_invalid_repeat_count() {
-    let output = larry(&["-r", "abc", "-h"]);
+fn help_is_printed_on_request() {
+    let output = larry(&["-h"]);
 
     assert!(output.status.success());
     assert!(stdout(&output).contains("Usage: larry"));
+    assert!(stderr(&output).is_empty());
+}
+
+#[test]
+fn version_is_printed_on_request() {
+    let output = larry(&["-v"]);
+
+    assert!(output.status.success());
+    assert_eq!(
+        stdout(&output),
+        format!("larry {}\n", env!("CARGO_PKG_VERSION"))
+    );
+    assert!(stderr(&output).is_empty());
 }
 
 #[test]
