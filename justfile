@@ -1,9 +1,5 @@
-set unstable
-
-fmt:
-    just --fmt
-    cargo fmt
-    nixfmt flake.nix
+install:
+    cargo install --path .
 
 hint := ""
 commit *files="":
