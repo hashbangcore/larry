@@ -1,7 +1,9 @@
 //! End-to-end tests over the compiled `larry` binary.
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::process::{Command, Output, Stdio};
+use std::sync::mpsc;
+use std::time::Duration;
 
 /// Runs larry with the given arguments and no piped input.
 fn larry(args: &[&str]) -> Output {
@@ -205,7 +207,7 @@ fn an_invalid_repeat_count_fails_with_a_clear_error() {
     assert!(!output.status.success());
     assert!(stderr(&output).contains("invalid value 'abc'"));
     assert!(stderr(&output).contains("invalid repeat count 'abc'"));
-    assert!(stdout(&output).is_empty());
+    assert_eq!(stdout(&output), "");
 }
 
 #[test]
@@ -214,7 +216,7 @@ fn a_repeat_count_above_the_maximum_fails_with_a_clear_error() {
 
     assert!(!output.status.success());
     assert!(stderr(&output).contains("repeat count must not exceed 100"));
-    assert!(stdout(&output).is_empty());
+    assert_eq!(stdout(&output), "");
 }
 
 #[test]
@@ -223,7 +225,7 @@ fn repeat_without_a_count_fails_with_a_clear_error() {
 
     assert!(!output.status.success());
     assert!(stderr(&output).contains("a value is required"));
-    assert!(stdout(&output).is_empty());
+    assert_eq!(stdout(&output), "");
 }
 
 #[test]
@@ -232,7 +234,7 @@ fn repeat_without_a_command_fails_with_a_clear_error() {
 
     assert!(!output.status.success());
     assert!(stderr(&output).contains("-r requires a command"));
-    assert!(stdout(&output).is_empty());
+    assert_eq!(stdout(&output), "");
 }
 
 #[test]
@@ -241,7 +243,7 @@ fn an_unknown_flag_fails_with_a_clear_error() {
 
     assert!(!output.status.success());
     assert!(stderr(&output).contains("unexpected argument '--bogus'"));
-    assert!(stdout(&output).is_empty());
+    assert_eq!(stdout(&output), "");
 }
 
 #[test]
@@ -250,7 +252,7 @@ fn help_is_printed_on_request() {
 
     assert!(output.status.success());
     assert!(stdout(&output).contains("Usage: larry"));
-    assert!(stderr(&output).is_empty());
+    assert_eq!(stderr(&output), "");
 }
 
 #[test]
@@ -262,7 +264,7 @@ fn version_is_printed_on_request() {
         stdout(&output),
         format!("larry {}\n", env!("CARGO_PKG_VERSION"))
     );
-    assert!(stderr(&output).is_empty());
+    assert_eq!(stderr(&output), "");
 }
 
 #[test]
@@ -270,5 +272,48 @@ fn no_arguments_produce_no_output() {
     let output = larry(&[]);
 
     assert!(output.status.success());
-    assert!(stdout(&output).is_empty());
+    assert_eq!(stdout(&output), "");
+}
+
+#[test]
+fn an_endless_repetition_keeps_emitting_sections() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_larry"))
+        .args(["-r", "0", "printf hello"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("larry starts");
+
+    let mut pipe = child.stdout.take().expect("stdout is piped");
+    let (sender, receiver) = mpsc::channel();
+
+    std::thread::spawn(move || {
+        let mut seen = Vec::new();
+        let mut chunk = [0; 256];
+
+        loop {
+            match pipe.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => {
+                    seen.extend_from_slice(&chunk[..read]);
+
+                    if String::from_utf8_lossy(&seen).contains("[end section]") {
+                        break;
+                    }
+                }
+            }
+        }
+
+        let _ = sender.send(seen);
+    });
+
+    let seen = receiver
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the endless repetition emits a section");
+
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(String::from_utf8_lossy(&seen).contains("[command]\nprintf hello"));
 }
