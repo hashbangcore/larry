@@ -5,5 +5,6 @@ fmt:
     cargo fmt
     nixfmt flake.nix
 
-commit hint="":
-    netero commit {{ hint }} | git commit --edit -F -
+hint := ""
+commit *files="":
+    gareth repo commit {{ if hint != "" { "--hint " + quote(hint) } else { "" } }} {{ files }} | git commit {{ files }} -F - --edit
