@@ -68,27 +68,27 @@ cargo build --release
 ## Usage
 
 ```
-Version 0.1.0
+Capture piped stdin and execute commands, producing structured output with [section] markers.
 
 Usage: larry [OPTIONS] [COMMAND]...
 
-Capture piped stdin and execute commands, producing structured output
-with [section] markers.
-
 Arguments:
-  [COMMAND]...    Commands to execute via sh -c
+  [COMMAND]...  Commands to execute via sh -c
 
 Options:
-  -r <N>          Repeat next command N times
-                  default: 1, max: 100, 0 = infinite loop with 5s delay
+  -r, --repeat <N>  How many times to repeat the corresponding command
+  -v, --version     Show version and exit
+  -h, --help        Print help (see more with '--help')
+```
 
-  -v              Show version and exit
-
-  -h              Show this help message and exit
+A repeat count defaults to 1, accepts up to 100, and 0 repeats the command
+forever with a 5 second pause between runs.
 
 Each command and each repetition produces its own [section] in the output.
 Use quotes to pass flags to commands: larry "ls -la"
-```
+
+Repeat counts are paired with commands in the order they appear, so
+`larry -r 2 pwd -r 3 date` runs `pwd` twice and `date` three times.
 
 ---
 
